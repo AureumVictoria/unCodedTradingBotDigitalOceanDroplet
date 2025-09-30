@@ -74,8 +74,8 @@ API_KEY=dein_echter_api_key_hier
 API_SECRET=dein_echter_api_secret_hier
 
 # Telegram Bot - WICHTIG!
-TELEGRAM_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_CHAT_ID=123456789
+TELEGRAM_TOKEN=123456MNOpqrsTUVwxyz
+TELEGRAM_CHAT_ID=1236789
 
 # Database Password - WICHTIG!
 DATABASE_URL=postgresql://tradingbot:DEIN_STARKES_PASSWORT@postgres:5432/trading_db
