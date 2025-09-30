@@ -1,94 +1,373 @@
-# .do/deploy.template.yaml
-spec:
-  name: trading-bot-app
+#cloud-config
 
-  workers:
-    - name: trading-bot
-      instance_size_slug: apps-s-1vcpu-0.5gb
-      instance_count: 1
-      image:
-        registry_type: DOCKER_HUB
-        registry: aureumvictoria
-        repository: uncoded-trading-bot
-        tag: "2025.09.09"
-      envs:
-        # ---- ZUERST: App-ENVs ----
-        - key: API_KEY
-          scope: RUN_TIME
-          type: SECRET
-        - key: API_SECRET
-          scope: RUN_TIME
-          type: SECRET
+# ========================================
+# Trading Bot DigitalOcean Droplet Setup
+# Cloud-Init Automatische Installation
+# ========================================
 
-        # ---- DB-ENVs (mit SSL-Erzwingung) ----
-        - key: POSTGRES_HOST
-          scope: RUN_TIME
-          value: "${db.HOSTNAME}"
-        - key: POSTGRES_PORT
-          scope: RUN_TIME
-          value: "${db.PORT}"
-        - key: POSTGRES_DB
-          scope: RUN_TIME
-          value: "${db.DATABASE}"
-        - key: POSTGRES_USER
-          scope: RUN_TIME
-          value: "${db.USERNAME}"
-        - key: POSTGRES_PASSWORD
-          scope: RUN_TIME
-          value: "${db.PASSWORD}"
-        - key: DATABASE_URL
-          scope: RUN_TIME
-          value: "${db.DATABASE_URL}"
-        - key: PGSSLMODE
-          scope: RUN_TIME
-          value: "require"
+# System Updates und Package Installation
+package_update: true
+package_upgrade: true
 
-    - name: telegram-bot
-      instance_size_slug: apps-s-1vcpu-0.5gb
-      instance_count: 1
-      image:
-        registry_type: DOCKER_HUB
-        registry: aureumvictoria
-        repository: uncoded-telegram-bot
-        tag: "2025.09.09"
-      envs:
-        # ---- ZUERST: Telegram-ENVs ----
-        - key: TELEGRAM_BOT_TOKEN
-          scope: RUN_TIME
-          type: SECRET
-          value: "535695104:AAF43-oaqF9GVRkBW3UFnxESIbJXdVCZA58"
-        - key: TELEGRAM_GROUP_ID
-          scope: RUN_TIME
-          value: "-1002896686710"
-        - key: TELEGRAM_OWNER_ID
-          scope: RUN_TIME
-          value: "545568537"
+packages:
+  - docker.io
+  - docker-compose
+  - postgresql-client
+  - curl
+  - git
+  - ufw
+  - fail2ban
 
-        # ---- DB-ENVs (mit SSL-Erzwingung) ----
-        - key: POSTGRES_HOST
-          scope: RUN_TIME
-          value: "${db.HOSTNAME}"
-        - key: POSTGRES_PORT
-          scope: RUN_TIME
-          value: "${db.PORT}"
-        - key: POSTGRES_DB
-          scope: RUN_TIME
-          value: "${db.DATABASE}"
-        - key: POSTGRES_USER
-          scope: RUN_TIME
-          value: "${db.USERNAME}"
-        - key: POSTGRES_PASSWORD
-          scope: RUN_TIME
-          value: "${db.PASSWORD}"
-        - key: DATABASE_URL
-          scope: RUN_TIME
-          value: "${db.DATABASE_URL}"
-        - key: PGSSLMODE
-          scope: RUN_TIME
-          value: "require"
+# Docker Gruppe erstellen und User hinzufügen
+groups:
+  - docker
 
-  databases:
-    - name: db
-      engine: PG
-      version: "16"
-      production: false
+system_info:
+  default_user:
+    groups: [docker]
+
+# Firewall Konfiguration
+runcmd:
+  # ===================================
+  # SCHRITT 1: System vorbereiten
+  # ===================================
+  - echo "🚀 Starting Trading Bot Setup..."
+  
+  # Docker starten und aktivieren
+  - systemctl start docker
+  - systemctl enable docker
+  
+  # ===================================
+  # SCHRITT 2: Firewall konfigurieren
+  # ===================================
+  - ufw --force enable
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 5432/tcp
+  
+  # ===================================
+  # SCHRITT 3: PostgreSQL Container
+  # ===================================
+  - |
+    docker run -d \
+      --name postgres \
+      --restart always \
+      -e POSTGRES_USER=tradingbot \
+      -e POSTGRES_PASSWORD=CHANGE_ME_STRONG_PASSWORD \
+      -e POSTGRES_DB=trading_db \
+      -v postgres_data:/var/lib/postgresql/data \
+      -p 5432:5432 \
+      postgres:15-alpine
+  
+  - sleep 10
+  - echo "✅ PostgreSQL Container gestartet"
+  
+  # ===================================
+  # SCHRITT 4: Environment File erstellen
+  # ===================================
+  - mkdir -p /opt/trading-bot
+  - |
+    cat > /opt/trading-bot/.env << 'EOF'
+    # Exchange API Credentials
+    API_KEY=DEIN_EXCHANGE_API_KEY
+    API_SECRET=DEIN_EXCHANGE_API_SECRET
+    
+    # Telegram Bot
+    TELEGRAM_TOKEN=DEIN_TELEGRAM_BOT_TOKEN
+    TELEGRAM_CHAT_ID=DEINE_TELEGRAM_CHAT_ID
+    
+    # Database Connection
+    DATABASE_URL=postgresql://tradingbot:CHANGE_ME_STRONG_PASSWORD@postgres:5432/trading_db
+    DB_HOST=postgres
+    DB_PORT=5432
+    DB_NAME=trading_db
+    DB_USER=tradingbot
+    DB_PASSWORD=CHANGE_ME_STRONG_PASSWORD
+    
+    # Trading Bot Settings
+    EXCHANGE=binance
+    TRADING_PAIR=BTC/USDT
+    MAX_POSITIONS=5
+    POSITION_SIZE=100
+    STOP_LOSS_PERCENT=2.0
+    TAKE_PROFIT_PERCENT=5.0
+    
+    # Optional: Weitere Einstellungen
+    LOG_LEVEL=INFO
+    TIMEZONE=Europe/Berlin
+    EOF
+  
+  - chmod 600 /opt/trading-bot/.env
+  - echo "✅ Environment File erstellt"
+  
+  # ===================================
+  # SCHRITT 5: Docker Compose File
+  # ===================================
+  - |
+    cat > /opt/trading-bot/docker-compose.yml << 'EOF'
+    version: '3.8'
+    
+    services:
+      # PostgreSQL Datenbank (bereits gestartet, hier als Referenz)
+      postgres:
+        image: postgres:15-alpine
+        container_name: postgres
+        restart: always
+        environment:
+          POSTGRES_USER: tradingbot
+          POSTGRES_PASSWORD: CHANGE_ME_STRONG_PASSWORD
+          POSTGRES_DB: trading_db
+        volumes:
+          - postgres_data:/var/lib/postgresql/data
+        ports:
+          - "5432:5432"
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U tradingbot"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+    
+      # Trading Bot 1 - Main Bot
+      trading-bot-1:
+        image: DEIN_DOCKERHUB_USERNAME/trading-bot:latest
+        container_name: trading-bot-1
+        restart: always
+        env_file:
+          - .env
+        environment:
+          - BOT_NAME=MainBot
+          - BOT_INSTANCE=1
+        depends_on:
+          postgres:
+            condition: service_healthy
+        networks:
+          - trading-network
+        logging:
+          driver: "json-file"
+          options:
+            max-size: "10m"
+            max-file: "3"
+    
+      # Trading Bot 2 - Backup/Alternative Strategy Bot
+      trading-bot-2:
+        image: DEIN_DOCKERHUB_USERNAME/trading-bot-alternative:latest
+        container_name: trading-bot-2
+        restart: always
+        env_file:
+          - .env
+        environment:
+          - BOT_NAME=BackupBot
+          - BOT_INSTANCE=2
+        depends_on:
+          postgres:
+            condition: service_healthy
+        networks:
+          - trading-network
+        logging:
+          driver: "json-file"
+          options:
+            max-size: "10m"
+            max-file: "3"
+    
+      # Optional: Monitoring mit Grafana
+      # grafana:
+      #   image: grafana/grafana:latest
+      #   container_name: grafana
+      #   restart: always
+      #   ports:
+      #     - "3000:3000"
+      #   environment:
+      #     - GF_SECURITY_ADMIN_PASSWORD=admin
+      #   volumes:
+      #     - grafana_data:/var/lib/grafana
+      #   networks:
+      #     - trading-network
+    
+    volumes:
+      postgres_data:
+      # grafana_data:
+    
+    networks:
+      trading-network:
+        driver: bridge
+    EOF
+  
+  - echo "✅ Docker Compose File erstellt"
+  
+  # ===================================
+  # SCHRITT 6: Monitoring Script
+  # ===================================
+  - |
+    cat > /opt/trading-bot/monitor.sh << 'EOF'
+    #!/bin/bash
+    
+    echo "======================================"
+    echo "Trading Bot Status Check"
+    echo "======================================"
+    echo ""
+    
+    # Container Status
+    echo "📦 Container Status:"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    echo ""
+    
+    # Logs der letzten 50 Zeilen
+    echo "📝 Letzte Logs Trading Bot 1:"
+    docker logs --tail 50 trading-bot-1
+    echo ""
+    
+    echo "📝 Letzte Logs Trading Bot 2:"
+    docker logs --tail 50 trading-bot-2
+    echo ""
+    
+    # Disk Space
+    echo "💾 Disk Space:"
+    df -h /
+    echo ""
+    
+    # Memory Usage
+    echo "🧠 Memory Usage:"
+    free -h
+    echo ""
+    EOF
+  
+  - chmod +x /opt/trading-bot/monitor.sh
+  - echo "✅ Monitoring Script erstellt"
+  
+  # ===================================
+  # SCHRITT 7: Startup Script
+  # ===================================
+  - |
+    cat > /opt/trading-bot/start-bots.sh << 'EOF'
+    #!/bin/bash
+    
+    echo "🚀 Starting Trading Bots..."
+    cd /opt/trading-bot
+    
+    # Docker Compose starten
+    docker-compose up -d
+    
+    echo "✅ Bots gestartet!"
+    echo ""
+    echo "Verwende folgende Befehle:"
+    echo "  docker-compose logs -f          # Logs anzeigen"
+    echo "  docker-compose ps               # Status prüfen"
+    echo "  docker-compose restart          # Bots neustarten"
+    echo "  docker-compose down             # Bots stoppen"
+    echo "  ./monitor.sh                    # Status Check"
+    EOF
+  
+  - chmod +x /opt/trading-bot/start-bots.sh
+  
+  # ===================================
+  # SCHRITT 8: Systemd Service
+  # ===================================
+  - |
+    cat > /etc/systemd/system/trading-bot.service << 'EOF'
+    [Unit]
+    Description=Trading Bot Service
+    Requires=docker.service
+    After=docker.service
+    
+    [Service]
+    Type=oneshot
+    RemainAfterExit=yes
+    WorkingDirectory=/opt/trading-bot
+    ExecStart=/usr/bin/docker-compose up -d
+    ExecStop=/usr/bin/docker-compose down
+    
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  
+  - systemctl daemon-reload
+  - systemctl enable trading-bot.service
+  
+  # ===================================
+  # SCHRITT 9: Welcome Message
+  # ===================================
+  - |
+    cat > /etc/motd << 'EOF'
+    
+    ╔═══════════════════════════════════════════════════════╗
+    ║                                                       ║
+    ║      🤖 Trading Bot DigitalOcean Droplet 🤖          ║
+    ║                                                       ║
+    ╚═══════════════════════════════════════════════════════╝
+    
+    📍 Installation abgeschlossen!
+    
+    ⚙️  WICHTIG - Konfiguration anpassen:
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    1️⃣  Environment Variablen bearbeiten:
+       nano /opt/trading-bot/.env
+       
+       Folgendes MUSS geändert werden:
+       - API_KEY (Dein Exchange API Key)
+       - API_SECRET (Dein Exchange Secret)
+       - TELEGRAM_TOKEN (Dein Bot Token)
+       - DB_PASSWORD (PostgreSQL Passwort)
+    
+    2️⃣  Docker Compose anpassen:
+       nano /opt/trading-bot/docker-compose.yml
+       
+       Ersetze:
+       - DEIN_DOCKERHUB_USERNAME mit deinem Docker Hub Username
+       - Image Namen mit deinen tatsächlichen Images
+    
+    3️⃣  Bots starten:
+       cd /opt/trading-bot
+       ./start-bots.sh
+    
+    📊 Nützliche Befehle:
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    • Status prüfen:     ./monitor.sh
+    • Logs anzeigen:     docker-compose logs -f
+    • Bot neustarten:    docker-compose restart
+    • Bot stoppen:       docker-compose down
+    • PostgreSQL:        docker exec -it postgres psql -U tradingbot -d trading_db
+    
+    📝 Wichtige Dateien:
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    /opt/trading-bot/.env              → Environment Variablen
+    /opt/trading-bot/docker-compose.yml → Docker Konfiguration
+    /opt/trading-bot/monitor.sh        → Status Monitoring
+    /opt/trading-bot/start-bots.sh     → Bot Startup Script
+    
+    🔒 Sicherheit:
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    • Firewall ist aktiv (UFW)
+    • Fail2ban ist installiert
+    • Nur Ports 22, 80, 443, 5432 sind offen
+    
+    ⚠️  ACHTUNG: Bitte ändere alle Passwörter und API Keys!
+    
+    EOF
+  
+  - echo "✅ Setup abgeschlossen!"
+  - echo "📝 Bitte /etc/motd für weitere Anweisungen lesen"
+
+# Automatischer Reboot nach Installation (optional)
+# power_state:
+#   mode: reboot
+#   message: "Rebooting after initial setup"
+#   timeout: 30
+#   condition: true
+
+# Final Message
+final_message: |
+  ╔═══════════════════════════════════════════════════════╗
+  ║   ✅ Trading Bot Installation abgeschlossen!         ║
+  ╚═══════════════════════════════════════════════════════╝
+  
+  Nächste Schritte:
+  1. SSH einloggen: ssh root@YOUR_DROPLET_IP
+  2. Konfiguration anpassen: nano /opt/trading-bot/.env
+  3. Bots starten: cd /opt/trading-bot && ./start-bots.sh
+  
+  System wird gestartet...
